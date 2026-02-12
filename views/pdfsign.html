@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>חתימה על מסמך</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 30px auto; padding: 0 16px; color: #1f2937; }
+    .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; background: #fff; }
+    label { display: block; margin: 10px 0 4px; font-weight: 700; }
+    input, button { font-size: 15px; }
+    input[type="text"] { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
+    #signaturePad { border: 1px dashed #94a3b8; width: 100%; height: 180px; touch-action: none; background: #f8fafc; border-radius: 8px; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+    .primary { background: #2563eb; color: #fff; }
+    .secondary { background: #e2e8f0; color: #0f172a; }
+    #status { margin-top: 10px; font-weight: 700; }
+    .pdf-preview { width: 100%; min-height: 420px; border: 1px solid #cbd5e1; border-radius: 8px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+</head>
+<body>
+  <h1>חתימה על מסמך PDF</h1>
+  <p>המסמך כבר צורף בקישור. כל מה שנשאר זה לחתום וללחוץ "שלח".</p>
+  <p><small>פותחים לינק בפורמט: <code>/pdf-sign?doc=DOCUMENT_ID</code> (או <code>?pdf=https://.../file.pdf</code>).</small></p>
+
+  <div class="card">
+    <label for="signerName">שם מלא</label>
+    <input id="signerName" type="text" placeholder="ישראל ישראלי">
+  </div>
+
+  <div class="card">
+    <label>חתימה</label>
+    <canvas id="signaturePad"></canvas>
+    <div class="actions">
+      <button id="clearSig" type="button" class="secondary">נקה חתימה</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>המסמך שנשלח אליך</label>
+    <iframe id="pdfPreview" class="pdf-preview" title="PDF preview"></iframe>
+    <div class="actions">
+      <button id="submitBtn" class="primary" type="button">שלח מסמך חתום</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    (function () {
+      const signerNameInput = document.getElementById('signerName');
+      const submitBtn = document.getElementById('submitBtn');
+      const statusEl = document.getElementById('status');
+      const preview = document.getElementById('pdfPreview');
+
+      const params = new URLSearchParams(window.location.search);
+      const directPdfUrl = params.get('pdf');
+      const docId = params.get('doc');
+      const pdfUrl = docId ? `/api/v1/pdf-sign/document/${encodeURIComponent(docId)}` : directPdfUrl;
+      const fileNameFromUrl = params.get('name') || ((directPdfUrl || '').split('/').pop() || 'document.pdf').split('?')[0] || 'document.pdf';
+
+      const canvas = document.getElementById('signaturePad');
+      const ctx = canvas.getContext('2d');
+      let drawing = false;
+      let hadStroke = false;
+
+      function resizeCanvas () {
+        const ratio = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * ratio;
+        canvas.height = rect.height * ratio;
+        ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+      }
+
+      function pointFromEvent (event) {
+        const rect = canvas.getBoundingClientRect();
+        if (event.touches && event.touches[0]) {
+          return { x: event.touches[0].clientX - rect.left, y: event.touches[0].clientY - rect.top };
+        }
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      }
+
+      function startDrawing (event) { drawing = true; const p = pointFromEvent(event); ctx.beginPath(); ctx.moveTo(p.x, p.y); }
+      function moveDrawing (event) {
+        if (!drawing) return;
+        event.preventDefault();
+        const p = pointFromEvent(event);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        hadStroke = true;
+      }
+      function stopDrawing () { drawing = false; }
+
+      function setStatus (message, isError) {
+        statusEl.textContent = message;
+        statusEl.style.color = isError ? '#b91c1c' : '#166534';
+      }
+
+      if (!pdfUrl) {
+        setStatus('חסר קישור לקובץ. שלחו לינק עם הפרמטר doc או pdf.', true);
+        submitBtn.disabled = true;
+      } else {
+        preview.src = pdfUrl;
+      }
+
+      document.getElementById('clearSig').addEventListener('click', () => { ctx.clearRect(0, 0, canvas.width, canvas.height); hadStroke = false; });
+      canvas.addEventListener('mousedown', startDrawing);
+      canvas.addEventListener('mousemove', moveDrawing);
+      window.addEventListener('mouseup', stopDrawing);
+      canvas.addEventListener('touchstart', startDrawing, { passive: true });
+      canvas.addEventListener('touchmove', moveDrawing, { passive: false });
+      window.addEventListener('touchend', stopDrawing, { passive: true });
+
+      submitBtn.addEventListener('click', async () => {
+        const signerName = signerNameInput.value.trim();
+
+        if (!pdfUrl) return;
+        if (!signerName) { setStatus('נא למלא שם מלא.', true); return; }
+        if (!hadStroke) { setStatus('נא לחתום בתוך מסגרת החתימה.', true); return; }
+
+        try {
+          setStatus('מעבד ושולח מסמך חתום...', false);
+
+          const fileResponse = await fetch(pdfUrl);
+          if (!fileResponse.ok) {
+            setStatus('לא ניתן לטעון את קובץ ה-PDF מהקישור.', true);
+            return;
+          }
+
+          const fileBuffer = await fileResponse.arrayBuffer();
+          const pdfDoc = await PDFLib.PDFDocument.load(fileBuffer);
+
+          const pngData = canvas.toDataURL('image/png');
+          const pngImage = await pdfDoc.embedPng(pngData);
+          const pages = pdfDoc.getPages();
+          const lastPage = pages[pages.length - 1];
+          const pageWidth = lastPage.getWidth();
+
+          const signWidth = 180;
+          const signHeight = 60;
+          const signX = Math.max(36, pageWidth - signWidth - 36);
+          const signY = 36;
+
+          lastPage.drawImage(pngImage, { x: signX, y: signY, width: signWidth, height: signHeight });
+          lastPage.drawText(`${signerName} | ${new Date().toLocaleString()}`, { x: signX, y: signY + signHeight + 6, size: 10 });
+
+          const signedPdfBytes = await pdfDoc.save();
+          let signedBinary = '';
+          const chunkSize = 0x8000;
+          for (let i = 0; i < signedPdfBytes.length; i += chunkSize) {
+            const chunk = signedPdfBytes.subarray(i, i + chunkSize);
+            signedBinary += String.fromCharCode.apply(null, chunk);
+          }
+
+          const response = await fetch('/api/v1/pdf-sign/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ signerName, fileName: fileNameFromUrl, signedPdfBase64: btoa(signedBinary) })
+          });
+
+          const result = await response.json();
+          if (!response.ok || !result.ok) { setStatus(result.error || 'שליחה נכשלה.', true); return; }
+          setStatus('נשלח בהצלחה. תודה!', false);
+        } catch (error) {
+          setStatus(`אירעה שגיאה: ${error.message}`, true);
+        }
+      });
+
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+    })();
+  </script>
+</body>
+</html>
