@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>יצירת קישור לחתימה</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 780px; margin: 30px auto; padding: 0 16px; color: #1f2937; }
+    .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 16px; margin-bottom: 16px; background: #fff; }
+    label { display: block; margin: 10px 0 4px; font-weight: 700; }
+    input[type="file"], input[type="text"], textarea { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; box-sizing: border-box; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; cursor: pointer; background: #2563eb; color: #fff; font-size: 15px; }
+    #status { margin-top: 10px; font-weight: 700; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <h1>יצירת קישור חתימה ללקוח</h1>
+  <p>כאן אתה מעלה PDF פעם אחת ומקבל לינק מוכן לשליחה ללקוח.</p>
+
+  <div class="card">
+    <h2 style="margin-top:0;">איך מתחילים? (פשוט)</h2>
+    <ol style="margin:0; padding-right:20px; line-height:1.8;">
+      <li>וודא שמייל היעד שלך הוגדר במערכת (על ידי מי שהתקין את השרת).</li>
+      <li>בחר כאן קובץ PDF.</li>
+      <li>לחץ על "צור קישור לשליחה ללקוח".</li>
+      <li>העתק את הקישור ושלח ללקוח בוואטסאפ/מייל.</li>
+      <li>כשהלקוח חותם ולוחץ "שלח", הקובץ החתום מגיע למייל שהוגדר.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <label for="pdfFile">בחר קובץ PDF</label>
+    <input id="pdfFile" type="file" accept="application/pdf">
+
+    <label for="displayName">שם קובץ להצגה (אופציונלי)</label>
+    <input id="displayName" type="text" placeholder="agreement.pdf">
+
+    <div class="row" style="margin-top:12px;">
+      <button id="createLinkBtn" type="button">צור קישור לשליחה ללקוח</button>
+      <button id="copyBtn" type="button" style="background:#0f766e;">העתק קישור</button>
+    </div>
+
+    <label for="generatedLink" style="margin-top:12px;">הקישור לשליחה</label>
+    <textarea id="generatedLink" rows="3" readonly></textarea>
+
+    <div id="status"></div>
+  </div>
+
+  <script>
+    (function () {
+      const fileInput = document.getElementById('pdfFile');
+      const displayNameInput = document.getElementById('displayName');
+      const createLinkBtn = document.getElementById('createLinkBtn');
+      const copyBtn = document.getElementById('copyBtn');
+      const generatedLink = document.getElementById('generatedLink');
+      const statusEl = document.getElementById('status');
+
+      function setStatus (message, isError) {
+        statusEl.textContent = message;
+        statusEl.style.color = isError ? '#b91c1c' : '#166534';
+      }
+
+      createLinkBtn.addEventListener('click', async () => {
+        const file = fileInput.files[0];
+        if (!file) {
+          setStatus('נא לבחור קובץ PDF.', true);
+          return;
+        }
+
+        if (file.type !== 'application/pdf') {
+          setStatus('יש לבחור קובץ PDF בלבד.', true);
+          return;
+        }
+
+        try {
+          setStatus('מעלה קובץ ומייצר קישור...', false);
+
+          const fileBuffer = await file.arrayBuffer();
+          let binary = '';
+          const bytes = new Uint8Array(fileBuffer);
+          const chunkSize = 0x8000;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            const chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, chunk);
+          }
+
+          const response = await fetch('/api/v1/pdf-sign/create-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: displayNameInput.value.trim() || file.name,
+              pdfBase64: btoa(binary)
+            })
+          });
+
+          const result = await response.json();
+          if (!response.ok || !result.ok) {
+            setStatus(result.error || 'יצירת קישור נכשלה.', true);
+            return;
+          }
+
+          generatedLink.value = result.signLink;
+          setStatus(`הקישור נוצר בהצלחה. תוקף עד: ${new Date(result.expiresAt).toLocaleString()}`, false);
+        } catch (error) {
+          setStatus(`אירעה שגיאה: ${error.message}`, true);
+        }
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        if (!generatedLink.value) {
+          setStatus('אין עדיין קישור להעתקה.', true);
+          return;
+        }
+
+        try {
+          await navigator.clipboard.writeText(generatedLink.value);
+          setStatus('הקישור הועתק ללוח.', false);
+        } catch (error) {
+          generatedLink.select();
+          setStatus('לא ניתן להעתיק אוטומטית. בוצעה בחירה ידנית.', true);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
